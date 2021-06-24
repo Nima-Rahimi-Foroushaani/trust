@@ -59,7 +59,11 @@ type st_type =
 
 let unit_st = StTypProd(Id.make "Unit", [])
 
-type ghost_term = 
+type predicate =
+   PrdTrue
+   | PrdFalse
+
+type ghlost_term = 
    GtRealize of Id.t
    | GtUnRealize of Id.t
 
@@ -70,6 +74,20 @@ type term =
    | TmRef of mutability * term
    | TmLet of mutability * Id.t * st_type * term
    | TmSeq of term * term
+
+type fn_rep = {
+   pre: predicate;
+   post: predicate;
+}
+
+type fn_param = Id.t * st_type
+
+type fn_def = {
+   name: string;
+   rep: fn_rep;
+   params: fn_param list;
+   body: term;
+}
 end
 
 module Exe = struct
@@ -127,6 +145,7 @@ module Exe = struct
       StkUnboundVar
       | StkNpermAcs
       | StkUndefBeh
+      | StkCurrCtx
       | StkNotSupp
    
    type exec_rsl =
@@ -134,6 +153,64 @@ module Exe = struct
       | ExRslVlu
       | ExRslStuk of stuck
 
+   let translate_mut_perm mt = 
+      let open Ast in
+      match mt with
+      | MtImm -> PermRd
+      | MtMut -> PermWr
+   
+   let rec produce_val_of_sttyp sctx sttyp =
+      let open Ast in
+      match sttyp with
+      | StTypProd(id, elm_sttyps) ->
+         let (ids, typs) = List.split elm_sttyps in
+         let vals = List.map (produce_val_of_sttyp sctx) typs in
+         let elms = List.combine ids vals in
+         VluProd(id, elms)
+      | StTypRef(_, _)
+      | StTypRawPtr(_, _) -> VluLoc(fresh sctx "loc")
+
+   let initial_ctx params =
+      let rec initial_ctx_h params ((sstore, smem) as sctx) =
+         match params with
+         | [] -> sctx
+         | (id, sttyp)::tail ->
+            let bn = Id.name id in
+            let l = fresh sctx bn in
+            let sstore' = (id, l)::sstore in
+            let v = produce_val_of_sttyp (sstore', smem) sttyp in
+            let sctx' = (sstore', (l, (v, PermDel))::smem) in
+         initial_ctx_h tail sctx'
+         in
+      initial_ctx_h params ([], [])
+
+   let realize (id, styp) ((sstore, smem) as sctx) rl_history =
+      match List.find_opt ((=) id) rl_history with
+      (*It has already been realized*)
+      | Some(_) -> ExRslProgress, sctx, rl_history
+      | None -> begin
+         match List.assoc_opt id sstore with
+         | Some(l) -> begin
+            match List.assoc_opt l smem with
+            | Some(v, perm) -> begin
+               let open Ast in
+               match v with
+               | VluLoc(l1) when perm = PermDel -> begin
+                  match styp with
+                  | StTypRef(mt, styp1) -> let rl_perm = translate_mut_perm mt in
+                  ExRslProgress, (sstore, (l1,(produce_val_of_sttyp sctx styp1,rl_perm))::smem), id::rl_history
+                  | _ -> ExRslStuk(StkUndefBeh), sctx, rl_history
+               end
+               | _ -> ExRslStuk(StkCurrCtx) , sctx, rl_history
+            end
+            | None -> ExRslStuk(StkCurrCtx), sctx, rl_history
+         end
+         | None -> ExRslStuk(StkUnboundVar), sctx, rl_history
+      end
+
+   let unrealize (id, styp) ((sstore, smem) as sctx) =
+      true
+   
    let rec sym_exe_step t ((sstore, smem) as sctx:sym_ctx) =
       let open Ast in
       match t with
@@ -189,15 +266,39 @@ module Exe = struct
          | ExRslStuk(_) -> res
 end
 
+module Verification = struct
+let verify f =
+   let open Ast in
+   let open Exe in
+   let sctx = initial_ctx f.params in
+   sym_exe f.body sctx
+end
+
 open Ast
 open Exe
-let simple_var_read = TmSeq(TmLet(MtImm, Id.make "x", unit_st, TmVal(unit_v)),
-                           TmVar(Id.make "x")
-                        )
+let var_read =
+   TmSeq begin
+      TmLet(MtImm, Id.make "x", unit_st, TmVal(unit_v)),
+      TmVar(Id.make "x")
+   end
 
-let simple_imm_ref = TmSeq(TmLet(MtImm, Id.make "x", unit_st, TmVal(unit_v)),
-                           TmSeq(TmLet(MtImm, Id.make "xr", StTypRef(MtImm, unit_st), TmRef(MtImm, TmVar(Id.make "x"))),
-                                 TmDref(TmVar(Id.make "xr"))
-                           )
-                     )
+let imm_ref =
+   TmSeq begin
+      TmLet(MtImm, Id.make "x", unit_st, TmVal(unit_v)),
+      TmSeq begin
+         TmLet(MtImm, Id.make "xr", StTypRef(MtImm, unit_st), TmRef(MtImm, TmVar(Id.make "x"))),
+         TmDref(TmVar(Id.make "xr"))
+      end
+   end
+
+let unsafe_deref_fn = {
+   name= "unsafe_deref_fn";
+   rep= {pre=PrdTrue; post=PrdTrue};
+   params = (Id.make "x", StTypRef(MtImm, unit_st))::[];
+   body =
+   TmSeq begin
+      TmLet(MtImm, Id.make "ptr", StTypRawPtr(MtImm, unit_st), TmVar(Id.make "x")),
+      TmDref(TmVar(Id.make "ptr"))
+   end
+}
 ;;
