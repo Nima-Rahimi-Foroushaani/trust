@@ -57,7 +57,7 @@ type st_type =
    | StTypRef of mutability * st_type
    | StTypRawPtr of mutability * st_type
 
-let unit_st = StTypProd(Id.make "Unit", [])
+let unit_st = StTypProd(Id.make "unit", [])
 
 type predicate =
    PrdTrue
@@ -74,23 +74,26 @@ type term =
    | TmRef of mutability * term
    | TmLet of mutability * Id.t * st_type * term
    | TmSeq of term * term
+   | TmGhost of ghlost_term
 
 type fn_rep = {
    pre: predicate;
    post: predicate;
 }
 
-type fn_param = Id.t * st_type
+type st_ctx = (Id.t * st_type) list
 
 type fn_def = {
    name: string;
    rep: fn_rep;
-   params: fn_param list;
+   params: st_ctx;
    body: term;
 }
+
 end
 
 module Exe = struct
+
    type rt_type =
       RtTypProd of Id.t * (Id.t * rt_type) list
       |RtTypPtr
@@ -145,7 +148,8 @@ module Exe = struct
       StkUnboundVar
       | StkNpermAcs
       | StkUndefBeh
-      | StkCurrCtx
+      | StkCtxMismatch
+      | StkCtxCorrupt
       | StkNotSupp
    
    type exec_rsl =
@@ -159,119 +163,151 @@ module Exe = struct
       | MtImm -> PermRd
       | MtMut -> PermWr
    
-   let rec produce_val_of_sttyp sctx sttyp =
+   let rec produce_val_of_sttyp ((systore, symem) as syctx) sttyp =
       let open Ast in
       match sttyp with
-      | StTypProd(id, elm_sttyps) ->
-         let (ids, typs) = List.split elm_sttyps in
-         let vals = List.map (produce_val_of_sttyp sctx) typs in
-         let elms = List.combine ids vals in
-         VluProd(id, elms)
       | StTypRef(_, _)
-      | StTypRawPtr(_, _) -> VluLoc(fresh sctx "loc")
-
-   let initial_ctx params =
-      let rec initial_ctx_h params ((sstore, smem) as sctx) =
-         match params with
-         | [] -> sctx
-         | (id, sttyp)::tail ->
-            let bn = Id.name id in
-            let l = fresh sctx bn in
-            let sstore' = (id, l)::sstore in
-            let v = produce_val_of_sttyp (sstore', smem) sttyp in
-            let sctx' = (sstore', (l, (v, PermDel))::smem) in
-         initial_ctx_h tail sctx'
-         in
-      initial_ctx_h params ([], [])
-
-   let realize (id, styp) ((sstore, smem) as sctx) rl_history =
-      match List.find_opt ((=) id) rl_history with
-      (*It has already been realized*)
-      | Some(_) -> ExRslProgress, sctx, rl_history
-      | None -> begin
-         match List.assoc_opt id sstore with
-         | Some(l) -> begin
-            match List.assoc_opt l smem with
-            | Some(v, perm) -> begin
-               let open Ast in
-               match v with
-               | VluLoc(l1) when perm = PermDel -> begin
-                  match styp with
-                  | StTypRef(mt, styp1) -> let rl_perm = translate_mut_perm mt in
-                  ExRslProgress, (sstore, (l1,(produce_val_of_sttyp sctx styp1,rl_perm))::smem), id::rl_history
-                  | _ -> ExRslStuk(StkUndefBeh), sctx, rl_history
-               end
-               | _ -> ExRslStuk(StkCurrCtx) , sctx, rl_history
-            end
-            | None -> ExRslStuk(StkCurrCtx), sctx, rl_history
+      | StTypRawPtr(_, _) -> VluLoc(fresh syctx "loc")
+      | StTypProd(id, elm_sttyps) -> begin
+         match elm_sttyps with
+         | [] -> VluProd(id, [])
+         | (eid, est)::tail -> begin
+            let ev = produce_val_of_sttyp syctx est in
+            let dummy_sym = Symbol.make "" in
+            let symmem' = (dummy_sym, (ev, PermDen))::symem in
+            match produce_val_of_sttyp (systore, symmem') (StTypProd(id, tail)) with
+            | VluProd(_, evs) -> VluProd(id, (eid, ev)::evs)
+            | _-> assert false
          end
-         | None -> ExRslStuk(StkUnboundVar), sctx, rl_history
       end
 
+   let initial_symctx params =
+      let rec initial_symctx_h params ((sstore, smem) as symctx) =
+         match params with
+         | [] -> symctx
+         | (id, sttyp)::tail ->
+            let bn = Id.name id in
+            let l = fresh symctx bn in
+            let sstore' = (id, l)::sstore in
+            let v = produce_val_of_sttyp (sstore', smem) sttyp in
+            let symctx' = (sstore', (l, (v, PermDel))::smem) in
+         initial_symctx_h tail symctx'
+         in
+      initial_symctx_h params ([], [])
+
+   let realize id (stctx:Ast.st_ctx) ((systore, symem) as syctx:sym_ctx) rl_hist =
+      match List.assoc_opt id stctx with
+      | None -> ExRslStuk(StkUnboundVar), syctx, rl_hist
+      | Some(sttyp_id) -> begin
+         let open Ast in
+         match sttyp_id with
+         | StTypProd(_, _)
+         | StTypRawPtr(_) -> ExRslStuk(StkUndefBeh), syctx, rl_hist
+         | StTypRef(mt, sttyp_pointee) -> begin
+            let perm_pointee = translate_mut_perm mt in
+            match List.assoc_opt id systore with
+            | None -> ExRslStuk(StkCtxMismatch), syctx, rl_hist
+            | Some(l) -> begin
+               match List.assoc_opt l symem with
+               | None -> ExRslStuk(StkCtxCorrupt), syctx, rl_hist
+               | Some(v, ref_perm) ->
+                  if ref_perm  < PermRd then
+                     ExRslStuk(StkNpermAcs), syctx, rl_hist
+                  else begin
+                     match v with
+                     | VluProd(_, _) -> ExRslStuk(StkCtxMismatch), syctx, rl_hist
+                     | VluLoc(l_pointee) -> begin
+                     let sym_mem' = (l_pointee, (produce_val_of_sttyp syctx sttyp_pointee, perm_pointee))::symem in
+                     let rl_hist' = id::rl_hist in
+                     ExRslProgress, (systore, sym_mem'), rl_hist'
+                  end
+               end
+            end
+         end
+      end
    let unrealize (id, styp) ((sstore, smem) as sctx) =
       true
-   
-   let rec sym_exe_step t ((sstore, smem) as sctx:sym_ctx) =
+
+   let rec sym_exe_step t ((systore, symem) as syctx:sym_ctx) (stctx:Ast.st_ctx) rlhist =
       let open Ast in
       match t with
-      | TmVal(_) -> ExRslVlu, t, sctx
+      | TmVal(_) -> ExRslVlu, t, syctx, stctx, rlhist
       | TmVar(id) -> begin
-         match List.assoc_opt id sstore with
-         | Some(l) -> ExRslProgress, TmDref(TmVal(VluLoc(l))), sctx
-         | None -> ExRslStuk(StkUnboundVar), t, sctx
+         match List.assoc_opt id systore with
+         | None -> ExRslStuk(StkUnboundVar), t, syctx, stctx, rlhist
+         | Some(l) -> ExRslProgress, TmDref(TmVal(VluLoc(l))), syctx, stctx, rlhist
       end
       | TmDref(t1) -> begin
          match t1 with
          | TmVal(v) -> begin
             match v with
                | VluLoc(l) -> begin
-                  match List.assoc_opt l smem with
-                  | Some(v', p) when p >= PermRd -> ExRslProgress, TmVal(v'), sctx
-                  | _ -> ExRslStuk(StkNpermAcs), t, sctx
+                  match List.assoc_opt l symem with
+                  | Some(v', p) when p >= PermRd -> ExRslProgress, TmVal(v'), syctx, stctx, rlhist
+                  | _ -> ExRslStuk(StkNpermAcs), t, syctx, stctx, rlhist
                end
-               | _ -> ExRslStuk(StkUndefBeh), t, sctx
+               | _ -> ExRslStuk(StkUndefBeh), t, syctx, stctx, rlhist
          end
-         | _ -> let (rsl, t1',sctx') = sym_exe_step t1 sctx in rsl, TmDref(t1'), sctx'
+         | _ -> begin
+            let (rsl, t1', syctx', stctx', rlhist') = sym_exe_step t1 syctx stctx rlhist in
+            rsl, TmDref(t1'), syctx', stctx', rlhist'
+         end
       end
       | TmRef(_, t1) -> begin
          (** @todo: study and represent the behavior of poly-referenced references*)
          match t1 with
          | TmVar(id) -> begin
-            match List.assoc_opt id sstore with
-            | Some(l) -> ExRslProgress, TmVal(VluLoc(l)), sctx
-            | None -> ExRslStuk(StkUnboundVar), t, sctx
+            match List.assoc_opt id systore with
+            | None -> ExRslStuk(StkUnboundVar), t, syctx, stctx, rlhist
+            | Some(l) -> ExRslProgress, TmVal(VluLoc(l)), syctx, stctx, rlhist
          end
-         | _ -> ExRslStuk(StkUndefBeh), t, sctx
+         | _ -> ExRslStuk(StkUndefBeh), t, syctx, stctx, rlhist
       end
-      | TmLet(mty, id, sty, t1) -> begin
+      | TmLet(mt, id, sttyp, t1) -> begin
          match t1 with
          | TmVal(v) ->
             let n = Id.name id in
-            let l = fresh sctx n in
-            ExRslProgress, TmVal(unit_v),  ((id, l)::sstore, (l, (v, PermDel))::smem)
-         | _ -> let (rsl, t1', sctx') = sym_exe_step t1 sctx in (rsl, TmLet(mty, id, sty, t1'), sctx')
+            let l = fresh syctx n in
+            let systore' = (id, l)::systore in
+            let symem' = (l, (v, PermDel))::symem in
+            let stctx' = (id, sttyp)::stctx in
+            ExRslProgress, TmVal(unit_v),  (systore', symem'), stctx', rlhist
+         | _ -> begin
+            let (rsl, t1', syctx', stctx', rlhist') = sym_exe_step t1 syctx stctx rlhist in
+            rsl, TmLet(mt, id, sttyp, t1'), syctx', stctx', rlhist'
+         end
       end
       | TmSeq(t1, t2) -> begin
          match t1 with
-         (** handle values of Drop trait*)
-         | TmVal(_) -> ExRslProgress, t2, sctx
-         | _ -> let (rsl, t1', sctx') = sym_exe_step t1 sctx in (rsl, TmSeq(t1', t2), sctx')
+         (** @todo: handle values of Drop trait*)
+         | TmVal(_) -> ExRslProgress, t2, syctx, stctx, rlhist
+         | _ ->
+            let (rsl, t1', syctx', stctx', rlhist') = sym_exe_step t1 syctx stctx rlhist in
+            rsl, TmSeq(t1', t2), syctx', stctx', rlhist'
+      end
+      | TmGhost(gt) -> begin
+         match(gt) with
+         | GtRealize(id) ->
+            let (rsl, syctx', rlhist') = realize id stctx syctx rlhist in
+            let t' = if rsl = ExRslProgress then TmVal(unit_v) else t in
+            rsl, t', syctx', stctx, rlhist'
+         | GtUnRealize(_) -> ExRslStuk(StkNotSupp), t, syctx, stctx, rlhist
       end
 
-      let rec sym_exe t sctx = 
-         let (rsl_s, t', sctx') as res = sym_exe_step t sctx in
-         match rsl_s with
-         | ExRslProgress -> sym_exe t' sctx'
+      let rec sym_exe t syctx stctx rlhist = 
+         let (rsl, t', syctx', stctx', rlhist') as ret = sym_exe_step t syctx stctx rlhist in
+         match rsl with
+         | ExRslProgress -> sym_exe t' syctx' stctx' rlhist'
          | ExRslVlu
-         | ExRslStuk(_) -> res
+         | ExRslStuk(_) -> ret
 end
 
 module Verification = struct
 let verify f =
    let open Ast in
    let open Exe in
-   let sctx = initial_ctx f.params in
-   sym_exe f.body sctx
+   let syctx = initial_symctx f.params in
+   sym_exe f.body syctx f.params []
 end
 
 open Ast
@@ -291,7 +327,7 @@ let imm_ref =
       end
    end
 
-let unsafe_deref_fn = {
+let unsafe_deref_fn_fail = {
    name= "unsafe_deref_fn";
    rep= {pre=PrdTrue; post=PrdTrue};
    params = (Id.make "x", StTypRef(MtImm, unit_st))::[];
@@ -299,6 +335,20 @@ let unsafe_deref_fn = {
    TmSeq begin
       TmLet(MtImm, Id.make "ptr", StTypRawPtr(MtImm, unit_st), TmVar(Id.make "x")),
       TmDref(TmVar(Id.make "ptr"))
+   end
+}
+
+let unsafe_deref_fn_pass = {
+   name= "unsafe_deref_fn";
+   rep= {pre=PrdTrue; post=PrdTrue};
+   params = (Id.make "x", StTypRef(MtImm, unit_st))::[];
+   body =
+   TmSeq begin
+      TmLet(MtImm, Id.make "ptr", StTypRawPtr(MtImm, unit_st), TmVar(Id.make "x")),
+      TmSeq begin
+         TmGhost(GtRealize(Id.make "x")),
+         TmDref(TmVar(Id.make "ptr"))
+      end
    end
 }
 ;;
