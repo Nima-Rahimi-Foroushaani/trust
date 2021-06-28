@@ -16,6 +16,7 @@ module type SYMBOL = sig
    type t
    val make: string -> t
    val name: t -> string
+   val dummy: t
 end
 
 module Symbol = struct
@@ -26,12 +27,14 @@ module Symbol = struct
 
    let make n = {name=n}
    let name s = s.name
+   let dummy = {name=""}
 end
 
 module type ID = sig
    type t
    val make: string -> t
    val name: t -> string
+   val dummy: t
 end
 
 module Id = struct
@@ -41,6 +44,7 @@ module Id = struct
 
    let make n = {name= n}
    let name t = t.name
+   let dummy = {name=""}
 end
 
 module Ast = struct
@@ -89,7 +93,6 @@ type fn_def = {
    params: st_ctx;
    body: term;
 }
-
 end
 
 module Exe = struct
@@ -97,7 +100,6 @@ module Exe = struct
    type rt_type =
       RtTypProd of Id.t * (Id.t * rt_type) list
       |RtTypPtr
-
 
    type perm = PermDel | PermWr | PermRd | PermDen
 
@@ -113,6 +115,21 @@ module Exe = struct
    type sym_store = (Id.t * Symbol.t) list
    type sym_mem = (Symbol.t * (Ast.vlu * perm)) list
    type sym_ctx = sym_store * sym_mem
+
+   let rec rt_type_of_val v =
+      let open Ast in
+      match v with
+      | VluLoc(_) -> RtTypPtr
+      | VluProd(id, v_elms) -> begin
+         match v_elms with
+         | [] -> RtTypProd(id, [])
+         | (ide, ve)::tail ->
+            let te = rt_type_of_val ve in
+            let rttyp = rt_type_of_val (VluProd(Id.dummy, tail)) in
+            match rttyp with
+            | RtTypProd(_, t_elms) -> RtTypProd(id, (ide, te)::t_elms)
+            | _ -> assert false
+      end
 
    let rec is_sym_used_vlu sym v =
       let open Ast in
@@ -146,10 +163,13 @@ module Exe = struct
    
    type stuck =
       StkUnboundVar
-      | StkNpermAcs
+      | StkNpermAct
       | StkUndefBeh
       | StkCtxMismatch
       | StkCtxCorrupt
+      | StkLocInOccu
+      | StkChunkNtFound
+      | StkMemLeak
       | StkNotSupp
    
    type exec_rsl =
@@ -173,8 +193,7 @@ module Exe = struct
          | [] -> VluProd(id, [])
          | (eid, est)::tail -> begin
             let ev = produce_val_of_sttyp syctx est in
-            let dummy_sym = Symbol.make "" in
-            let symmem' = (dummy_sym, (ev, PermDen))::symem in
+            let symmem' = (Symbol.dummy, (ev, PermDen))::symem in
             match produce_val_of_sttyp (systore, symmem') (StTypProd(id, tail)) with
             | VluProd(_, evs) -> VluProd(id, (eid, ev)::evs)
             | _-> assert false
@@ -195,38 +214,111 @@ module Exe = struct
          in
       initial_symctx_h params ([], [])
 
+   let val_perm_of_id id (systore, symem) =
+      match List.assoc_opt id systore with
+      | None -> Error(StkUnboundVar)
+      | Some(l) -> begin
+         match List.assoc_opt l symem with
+         | None -> Error(StkCtxCorrupt)
+         | Some(v, perm) -> Ok(v, perm)
+      end
+
+   let rec is_consistent_rtt_stt rttyp sttyp =
+      let open Ast in
+      match rttyp with
+      | RtTypPtr -> begin
+         match sttyp with
+         | StTypRawPtr(_, _) | StTypRef(_, _) -> true
+         | _ -> false
+      end
+      | RtTypProd(id_rtt, elms_rtt) -> begin
+         match sttyp with
+         | StTypRawPtr(_, _)
+         | StTypRef(_, _) -> false
+         | StTypProd(id_stt, elms_stt) ->
+            if id_rtt <> id_stt then
+               false
+            else
+               match elms_rtt with
+               | [] -> elms_stt = []
+               | (ide_rtt, te_rtt)::tail_elms_rtt -> begin
+                  match elms_stt with
+                  | [] -> false
+                  | (ide_stt, te_stt):: tail_elms_stt -> begin
+                     ide_rtt = ide_stt &&
+                     is_consistent_rtt_stt te_rtt te_stt &&
+                     is_consistent_rtt_stt (RtTypProd(Id.dummy, tail_elms_rtt)) (StTypProd(Id.dummy, tail_elms_stt))
+                  end
+               end
+      end
+
    let realize id (stctx:Ast.st_ctx) ((systore, symem) as syctx:sym_ctx) rl_hist =
-      match List.assoc_opt id stctx with
-      | None -> ExRslStuk(StkUnboundVar), syctx, rl_hist
-      | Some(sttyp_id) -> begin
-         let open Ast in
-         match sttyp_id with
-         | StTypProd(_, _)
-         | StTypRawPtr(_) -> ExRslStuk(StkUndefBeh), syctx, rl_hist
-         | StTypRef(mt, sttyp_pointee) -> begin
-            let perm_pointee = translate_mut_perm mt in
-            match List.assoc_opt id systore with
-            | None -> ExRslStuk(StkCtxMismatch), syctx, rl_hist
-            | Some(l) -> begin
+      let rsl = val_perm_of_id id syctx in
+      match rsl  with
+      | Error(stk) -> ExRslStuk(stk), syctx, rl_hist
+      | Ok(idv, idv_p) ->
+         if idv_p < PermRd then
+            ExRslStuk(StkNpermAct), syctx, rl_hist
+         else
+            match idv with
+            | VluProd(_, _) -> ExRslStuk(StkUndefBeh), syctx, rl_hist
+            | VluLoc(l) -> begin
                match List.assoc_opt l symem with
-               | None -> ExRslStuk(StkCtxCorrupt), syctx, rl_hist
-               | Some(v, ref_perm) ->
-                  if ref_perm  < PermRd then
-                     ExRslStuk(StkNpermAcs), syctx, rl_hist
-                  else begin
-                     match v with
-                     | VluProd(_, _) -> ExRslStuk(StkCtxMismatch), syctx, rl_hist
-                     | VluLoc(l_pointee) -> begin
-                     let sym_mem' = (l_pointee, (produce_val_of_sttyp syctx sttyp_pointee, perm_pointee))::symem in
-                     let rl_hist' = id::rl_hist in
-                     ExRslProgress, (systore, sym_mem'), rl_hist'
+               | Some(_) -> ExRslStuk(StkLocInOccu), syctx, rl_hist
+               | None -> begin
+                  let open Ast in
+                  match List.assoc_opt id stctx with
+                  | None -> ExRslStuk(StkCtxMismatch), syctx, rl_hist
+                  | Some(id_sttyp) -> begin
+                     match id_sttyp with
+                     | StTypProd(_, _) -> ExRslStuk(StkCtxMismatch), syctx, rl_hist
+                     | StTypRawPtr(_, _) -> ExRslStuk(StkUndefBeh), syctx, rl_hist
+                     | StTypRef(mt, pointee_sttyp) ->
+                        let pointee_perm = translate_mut_perm mt in
+                        let pointee_val = produce_val_of_sttyp syctx pointee_sttyp in
+                        let symem' = (l, (pointee_val, pointee_perm))::symem in
+                        ExRslProgress, (systore, symem'), id::rl_hist
                   end
                end
             end
-         end
-      end
-   let unrealize (id, styp) ((sstore, smem) as sctx) =
-      true
+
+   let unrealize id (stctx:Ast.st_ctx) ((systore, symem) as syctx:sym_ctx) =
+      let rsl = val_perm_of_id id syctx in
+      match rsl with
+      | Error(stk) -> ExRslStuk(stk), syctx
+      | Ok(idv, idv_p) ->
+         if idv_p < PermRd then
+            ExRslStuk(StkNpermAct), syctx
+         else
+            match idv with
+            | VluProd(_, _) -> ExRslStuk(StkUndefBeh), syctx
+            | VluLoc(l) -> begin
+               let open Ast in
+               match List.assoc_opt l symem with
+               | None -> ExRslStuk(StkChunkNtFound), syctx
+               | Some(pointee_val, pointee_perm) -> begin
+                  match List.assoc_opt id stctx with
+                  | None -> ExRslStuk(StkCtxMismatch), syctx
+                  | Some(id_sttyp) -> begin
+                     match id_sttyp with
+                     | StTypProd(_, _) -> ExRslStuk(StkCtxMismatch), syctx
+                     | StTypRawPtr(_, _) -> ExRslStuk(StkUndefBeh), syctx
+                     | StTypRef(mt, pointee_sttyp) ->
+                        let pointee_perm_req = translate_mut_perm mt in
+                        if pointee_perm <> pointee_perm_req then
+                           ExRslStuk(StkNpermAct), syctx
+                        else
+                           let pointee_rttyp = rt_type_of_val pointee_val in
+                           let incons = not (is_consistent_rtt_stt pointee_rttyp pointee_sttyp) in
+                           if incons then
+                              ExRslStuk(StkCtxMismatch), syctx
+                           else
+                              let prd = (<>)(l, (pointee_val, pointee_perm)) in
+                              let symem' = List.filter prd symem in
+                              ExRslProgress, (systore, symem')
+                  end
+               end
+            end
 
    let rec sym_exe_step t ((systore, symem) as syctx:sym_ctx) (stctx:Ast.st_ctx) rlhist =
       let open Ast in
@@ -244,7 +336,7 @@ module Exe = struct
                | VluLoc(l) -> begin
                   match List.assoc_opt l symem with
                   | Some(v', p) when p >= PermRd -> ExRslProgress, TmVal(v'), syctx, stctx, rlhist
-                  | _ -> ExRslStuk(StkNpermAcs), t, syctx, stctx, rlhist
+                  | _ -> ExRslStuk(StkNpermAct), t, syctx, stctx, rlhist
                end
                | _ -> ExRslStuk(StkUndefBeh), t, syctx, stctx, rlhist
          end
@@ -303,11 +395,65 @@ module Exe = struct
 end
 
 module Verification = struct
+let rec unrealize_all stctx syctx rl_hist =
+let open Exe in
+match rl_hist with
+| [] -> Ok(syctx)
+| id::tail ->
+   let (rsl, syctx') = unrealize id stctx syctx in
+   match rsl with
+   | ExRslVlu -> assert false
+   | ExRslStuk(stk) -> Error(stk)
+   | ExRslProgress -> unrealize_all stctx syctx' tail
+
+let drop_val v symem =
+   (**@todo: handle values of Drop trait*)
+   let open Ast in
+   match v with
+   | VluLoc(_) -> symem
+   | VluProd(_, _) -> symem
+
+let rec drop_sym_store (systore, symem) = 
+   match systore with
+   | [] -> Ok(symem)
+   | (_, l)::tail ->
+      let open Exe in
+      match List.assoc_opt l symem with
+      | None -> Error(StkCtxCorrupt)
+      | Some(v, p) ->
+         let prd = (<>)(l,(v,p)) in
+         let symem' = List.filter prd symem in
+         let symem' = drop_val v symem' in
+         drop_sym_store (tail, symem')
+
+let clean_up stctx syctx rl_hist =
+   let rsl = unrealize_all stctx syctx rl_hist in
+   match rsl with
+   | Error(stk) -> Error(stk)
+   | Ok(syctx') ->
+      let rsl = drop_sym_store syctx' in
+      match rsl with
+      | Error(stk) -> Error(stk)
+      | Ok(symem') ->
+         let open Exe in
+         if symem' <> [] then
+            Error(StkMemLeak)
+         else
+            Ok()
+
 let verify f =
    let open Ast in
    let open Exe in
    let syctx = initial_symctx f.params in
-   sym_exe f.body syctx f.params []
+   let (rsl, t, syctx, stctx, rlhist) as ret = sym_exe f.body syctx f.params [] in
+   match rsl with
+   | ExRslProgress -> assert false
+   | ExRslStuk(_) -> Error(ret)
+   | ExRslVlu ->
+      let rsl = clean_up stctx syctx rlhist in
+      match rsl with
+      | Error(stk) -> Error(ExRslStuk(stk), t, syctx, stctx, rlhist)
+      | Ok() -> Ok()
 end
 
 open Ast
