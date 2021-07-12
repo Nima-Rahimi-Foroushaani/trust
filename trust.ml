@@ -474,7 +474,7 @@ let imm_ref =
    end
 
 let unsafe_deref_fn_fail = {
-   name= "unsafe_deref_fn";
+   name= "unsafe_deref_fn_fail";
    rep= {pre=PrdTrue; post=PrdTrue};
    params = (Id.make "x", StTypRef(MtImm, unit_st))::[];
    body =
@@ -483,9 +483,18 @@ let unsafe_deref_fn_fail = {
       TmDref(TmVar(Id.make "ptr"))
    end
 }
+(* pub fn unsafe_deref_fn_fail (x: & /*Imm*/ () ) -> () /* () is the unit type */
+//@ requires true
+//@ ensures true
+{
+    let /*Imm*/ ptr: *const () = x;
+    unsafe {
+        *ptr
+    }
+}*)
 
 let unsafe_deref_fn_pass = {
-   name= "unsafe_deref_fn";
+   name= "unsafe_deref_fn_pass";
    rep= {pre=PrdTrue; post=PrdTrue};
    params = (Id.make "x", StTypRef(MtImm, unit_st))::[];
    body =
@@ -498,3 +507,13 @@ let unsafe_deref_fn_pass = {
    end
 }
 ;;
+(*pub fn unsafe_deref_fn_pass (x: & /*Imm*/ () ) -> () /* () is the unit type */
+//@ requires true
+//@ ensures true
+{
+    let /*Imm*/ ptr: *const () = x;
+    unsafe {
+        /* @realize x; */
+        *ptr
+    }
+} *)
