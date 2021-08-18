@@ -1,31 +1,40 @@
-type vlu = VluProd of Id.t * (Id.t * vlu) list | VluLoc of Symbol.t
+type vlu =
+  | VluInt of Symbol.t
+  | VluLoc of Symbol.t
+  | VluProd of Id.t * (Id.t * vlu) list
 
-let unit_v = VluProd (Id.make "unit", [])
+let vlu_unit = VluProd (Id.make "unit", [])
 
 type mutability = MtImm | MtMut
 
 type st_type =
-  | StTypProd of Id.t * (Id.t * st_type) list
+  | StTypInt
   | StTypRef of mutability * st_type
   | StTypRawPtr of mutability * st_type
+  | StTypProd of Id.t * (Id.t * st_type) list
 
-let unit_st = StTypProd (Id.make "unit", [])
+let stt_unit = StTypProd (Id.make "unit", [])
 
-type predicate = PrdTrue | PrdFalse
+type proposition = PropTrue | PropFalse
 
-type ghlost_term = GtRealize of Id.t | GtUnRealize of Id.t
+type ghost_term = GtRealize of Id.t | GtUnRealize of Id.t
 
 type term =
   | TmVal of vlu
   | TmVar of Id.t
-  | TmDref of term
+  | TmLet of mutability * Id.t * st_type * term * term
+  | TmInLet of Id.t * term
+  | TmFin of term * term
+  | TmDrop of term
+  | TmAssign of term * term
   | TmRef of mutability * term
-  | TmLet of mutability * Id.t * st_type * term
+  | TmDref of term
+  | TmProd of Id.t * (Id.t * term) list
   | TmSeq of term * term
-  | TmGhost of ghlost_term
+  | TmGhost of ghost_term
 
-type fn_rep = { pre : predicate; post : predicate }
+type fn_rep = { pre : proposition; post : proposition }
 
 type st_ctx = (Id.t * st_type) list
 
-type fn_def = { name : string; rep : fn_rep; params : st_ctx; body : term }
+type fn_def = { name : Id.t; rep : fn_rep; params : st_ctx; body : term }
