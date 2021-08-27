@@ -42,7 +42,7 @@ module type Color_T = sig
 
   val make_cc : ccolor -> t
 
-  val ccolor_to_ansi_fg : ccolor -> string
+  val ccolor_to_rgb8_string : ccolor -> string -> string
 end
 
 module Color : Color_T = struct
@@ -101,13 +101,10 @@ module Color : Color_T = struct
     let r, g, b = ccolor_to_rgb cc in
     make_rgb8 r g b
 
-  let color_to_ansi_fg c =
-    let rgb8str =
-      match c with
-      | RGB_8 (r, g, b) ->
-          string_of_int r ^ ";" ^ string_of_int g ^ ";" ^ string_of_int b
-    in
-    "\\033[38;2;" ^ rgb8str ^ "m"
+  let color_to_rgb8_string c sep =
+    match c with
+    | RGB_8 (r, g, b) ->
+        string_of_int r ^ sep ^ string_of_int g ^ sep ^ string_of_int b
 
-  let ccolor_to_ansi_fg cc = color_to_ansi_fg @@ make_cc @@ cc
+  let ccolor_to_rgb8_string cc sep = color_to_rgb8_string (make_cc cc) sep
 end

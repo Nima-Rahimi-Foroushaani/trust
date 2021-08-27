@@ -1,31 +1,6 @@
-(* open Aux *)
+open Aux
 open Ast
 open Format
-
-module Shell = struct
-  let val_color = ""
-  (* Color.ccolor_to_ansi_fg Green *)
-
-  let stt_color = ""
-  (* Color.ccolor_to_ansi_fg BrBlue *)
-
-  let kwd_color = ""
-  (* Color.ccolor_to_ansi_fg BrWhite *)
-
-  let id_color = ""
-  (* Color.ccolor_to_ansi_fg Magenta *)
-
-  let perm_color = ""
-  (* Color.ccolor_to_ansi_fg BrCyan *)
-
-  let info_color = ""
-  (* Color.ccolor_to_ansi_fg White *)
-
-  let indent = 2
-
-  let reset_fmt = ""
-  (* "\\033[0m" *)
-end
 
 type print_tbox = {
   stt_o : unit -> unit;
@@ -281,47 +256,47 @@ let print_sym_ctx ptb (dctx, smem, pcond, rll) =
   ptb.box_v_o ();
 
   pr_component (fun () ->
-      print_info ptb "dyn ctx";
+      print_info ptb "dyn ctx:";
       ptb.space ();
       print_dy_ctx ptb dctx);
 
   pr_component (fun () ->
-      print_info ptb "sym mem";
+      print_info ptb "sym mem:";
       ptb.space ();
       print_smem ptb smem);
 
   pr_component (fun () ->
-      print_info ptb "path cond";
+      print_info ptb "path cond:";
       ptb.space ();
       print_path_cond ptb pcond);
 
   pr_component (fun () ->
-      print_info ptb "realized vars";
+      print_info ptb "realized vars:";
       ptb.space ();
       print_rll ptb rll);
 
   ptb.box_v_c ()
 
 let print_state ptb (t, stctx, syctx) =
-  let pr_ctx content =
+  let pr_txt content =
     ptb.box_o ();
     content ();
     ptb.box_c ();
     ptb.space ()
   in
   ptb.box_v_o ();
-  pr_ctx (fun () ->
-      print_info ptb "term";
+  pr_txt (fun () ->
+      print_info ptb "term:";
       ptb.space ();
       print_term ptb t);
 
-  pr_ctx (fun () ->
-      print_info ptb "static ctx";
+  pr_txt (fun () ->
+      print_info ptb "static ctx:";
       ptb.space ();
       print_st_ctx ptb stctx);
 
-  pr_ctx (fun () ->
-      print_info ptb "symbolic ctx";
+  pr_txt (fun () ->
+      print_info ptb "symbolic ctx:";
       ptb.space ();
       print_sym_ctx ptb syctx);
 
@@ -329,26 +304,77 @@ let print_state ptb (t, stctx, syctx) =
 
 type fmt = FmtShell | FmtLatex
 
+module Shell = struct
+  let esc = "\u{001B}"
+
+  let shell_escape_ccolor_fg cc =
+    let rgb8 = Color.ccolor_to_rgb8_string cc ";" in
+    esc ^ "[38;2;" ^ rgb8 ^ "m"
+
+  let shell_escape_ccolor_bg _ = ""
+  (* let rgb8 = Color.ccolor_to_rgb8_string cc ";" in
+     esc ^ "[48;2;" ^ rgb8 ^ "m" *)
+
+  let reset_fmt = esc ^ "[0m"
+
+  type txt_color = { fg : Color.ccolor; bg : Color.ccolor }
+
+  type stag += StagColor of txt_color
+
+  let mark_o_stag stag =
+    match stag with
+    | StagColor { fg; bg } ->
+        shell_escape_ccolor_fg fg ^ shell_escape_ccolor_bg bg
+    | _ -> ""
+
+  let mark_c_stag _ = reset_fmt
+end
+
 let print_tool_box_shell formatter =
+  pp_set_mark_tags formatter true;
+  let { print_open_stag = pr_o; print_close_stag = pr_c; _ } =
+    pp_get_formatter_stag_functions formatter ()
+  in
+  let fmt_stag_funs =
+    {
+      mark_open_stag = Shell.mark_o_stag;
+      mark_close_stag = Shell.mark_c_stag;
+      print_open_stag = pr_o;
+      print_close_stag = pr_c;
+    }
+  in
+  pp_set_formatter_stag_functions formatter fmt_stag_funs;
   {
-    stt_o = (fun () -> pp_print_string formatter Shell.stt_color);
-    stt_c = (fun () -> pp_print_string formatter Shell.reset_fmt);
-    val_o = (fun () -> pp_print_string formatter Shell.val_color);
-    val_c = (fun () -> pp_print_string formatter Shell.reset_fmt);
-    kwd_o = (fun () -> pp_print_string formatter Shell.kwd_color);
-    kwd_c = (fun () -> pp_print_string formatter Shell.reset_fmt);
-    id_o = (fun () -> pp_print_string formatter Shell.id_color);
-    id_c = (fun () -> pp_print_string formatter Shell.reset_fmt);
-    perm_o = (fun () -> pp_print_string formatter Shell.perm_color);
-    perm_c = (fun () -> pp_print_string formatter Shell.reset_fmt);
+    stt_o =
+      (fun () ->
+        pp_open_stag formatter (Shell.StagColor { fg = BrBlue; bg = Black }));
+    stt_c = pp_close_stag formatter;
+    val_o =
+      (fun () ->
+        pp_open_stag formatter (Shell.StagColor { fg = Green; bg = Black }));
+    val_c = pp_close_stag formatter;
+    kwd_o =
+      (fun () ->
+        pp_open_stag formatter (Shell.StagColor { fg = BrWhite; bg = Black }));
+    kwd_c = pp_close_stag formatter;
+    id_o =
+      (fun () ->
+        pp_open_stag formatter (Shell.StagColor { fg = BrMagenta; bg = Black }));
+    id_c = pp_close_stag formatter;
+    perm_o =
+      (fun () ->
+        pp_open_stag formatter (Shell.StagColor { fg = BrCyan; bg = Black }));
+    perm_c = pp_close_stag formatter;
     print_string = (fun str -> pp_print_string formatter str);
     space = pp_print_space formatter;
-    box_o = (fun () -> pp_open_hovbox formatter Shell.indent);
+    box_o = (fun () -> pp_open_hovbox formatter 2 (*indent*));
     box_c = pp_close_box formatter;
-    box_v_o = (fun () -> pp_open_vbox formatter Shell.indent);
+    box_v_o = (fun () -> pp_open_vbox formatter 0);
     box_v_c = pp_close_box formatter;
-    info_o = (fun () -> pp_print_string formatter Shell.info_color);
-    info_c = (fun () -> pp_print_string formatter Shell.reset_fmt);
+    info_o =
+      (fun () ->
+        pp_open_stag formatter (Shell.StagColor { fg = White; bg = Black }));
+    info_c = pp_close_stag formatter;
     flush = pp_print_flush formatter;
   }
 
