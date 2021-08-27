@@ -41,10 +41,11 @@ let clean_up stctx (dctx, smem, _, rll) =
       | Error stk -> Error stk
       | Ok smem' -> if smem' <> [] then Error StkMemLeak else Ok ())
 
-let verify f =
+let verify f print_state =
   let open Ast in
   let stctx, dctx, smem = init_sym_ctx f.params in
-  match sym_exe f.body stctx (dctx, smem, [], []) with
+  match sym_exe f.body stctx (dctx, smem, [], []) print_state with
   | Error stk -> Error stk
   | Ok (TmVal _, stctx', syctx') -> clean_up stctx' syctx'
-  | _ -> raise ctx_mismatch
+  | _ -> assert false
+(* sym_exe fails or returns value *)

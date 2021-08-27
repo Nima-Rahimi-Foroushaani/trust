@@ -21,6 +21,10 @@ type rlz_vars = Id.t list
 
 type sym_ctx = dy_ctx * sym_mem * path_cond * rlz_vars
 
+type exe_state = Ast.term * Ast.st_ctx * sym_ctx
+
+type exe_tree = exe_state Tree.t
+
 let rec dy_type_of_val v =
   let open Ast in
   match v with
@@ -434,9 +438,10 @@ let rec sym_exe_step t stctx ((dctx, smem, pcond, rll) as syctx) =
               let syctx' = (dctx, smem', pcond, rll') in
               Ok (TmVal vlu_unit, stctx, syctx')))
 
-let rec sym_exe t stctx syctx =
+let rec sym_exe t stctx syctx print_state =
+  print_state (t, stctx, syctx);
   let res = sym_exe_step t stctx syctx in
   match res with
   | Error stk -> Error stk
   | Ok (t', stctx', syctx') -> (
-      match t' with TmVal _ -> res | _ -> sym_exe t' stctx' syctx')
+      match t' with TmVal _ -> res | _ -> sym_exe t' stctx' syctx' print_state)

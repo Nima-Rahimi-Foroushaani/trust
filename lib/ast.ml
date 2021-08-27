@@ -37,4 +37,9 @@ type fn_rep = { pre : proposition; post : proposition }
 
 type st_ctx = (Id.t * st_type) list
 
-type fn_def = { name : Id.t; rep : fn_rep; params : st_ctx; body : term }
+type fn_def = {
+  name : Id.t;
+  rep : fn_rep;
+  params : (Id.t * st_type) list;
+  body : term;
+}

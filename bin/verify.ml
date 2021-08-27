@@ -3,6 +3,11 @@ open Ast
 
 (***@todo: handle return value*)
 (***@todo: handle mutability of function parameters themselves*)
+(***@todo: there is an inconsistency between the formalization and tRust implementation for the
+  "realize" and "unrealize" ghost terms. In the formalization, the body of command can contain any kind of
+  therm and then only the ones with variable names as their body have a defined semantic.
+  On the other hand, in implementation, these gosht terms only accept ids as their body.
+  Change implementation to coincide with formalization*)
 
 (*
 pub fn simple_i32_shared_pass(/*Imm*/ x: & /*Imm*/ i32, /*Imm*/ y: & /*Imm*/ i32) -> i32
@@ -87,8 +92,14 @@ let simple_i32_shared_fail =
               TmDref (TmVar (Id.make "ptr")) ) );
   }
 
-let _ = print_endline "tRust 0.0.0"
+let main () =
+  let _ = print_endline "tRust 0.0.0" in
+  let open Output in
+  let ptb = make_print_toolbox FmtShell Format.std_formatter in
+  let print_state = print_state ptb in
+  let _ = Fun_verify.verify simple_i32_shared_pass print_state in
+  (* let _ = Fun_verify.verify simple_i32_shared_fail print_state in *)
+  exit 0
+;;
 
-let _ = Fun_verify.verify simple_i32_shared_pass
-
-let _ = Fun_verify.verify simple_i32_shared_fail
+main ()
