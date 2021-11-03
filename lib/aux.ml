@@ -10,6 +10,17 @@ module Name = struct
     bn ^ idx_str
 end
 
+module ListAux = struct
+  let uniq l =
+    let rec uniq_h l ul =
+      match l with
+      | h :: tl ->
+          if List.exists (( = ) h) tl then uniq_h tl ul else uniq_h tl (h :: ul)
+      | [] -> ul
+    in
+    uniq_h l []
+end
+
 module Tree = struct
   type 'a t = Node of 'a * 'a t list
 end

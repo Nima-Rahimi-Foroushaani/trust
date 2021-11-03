@@ -1,3 +1,3 @@
 (executable
  (name verify)
- (libraries trust))
+ (libraries tRust_COR))
