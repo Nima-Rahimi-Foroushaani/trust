@@ -1,5 +1,4 @@
-open Trust
-open Ast
+(*
 
 (***@todo: handle return value*)
 (***@todo: handle mutability of function parameters themselves*)
@@ -102,4 +101,4 @@ let main () =
   exit 0
 ;;
 
-main ()
+main () *)

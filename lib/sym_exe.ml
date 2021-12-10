@@ -1,4 +1,4 @@
-open Sym_ast
+(* open Sym_ast
 open Aux
 
 type stack_frame = (Id.t * Symbol.t) list
@@ -496,4 +496,4 @@ let rec exe_step ins ((f, h) as cnf) =
      match res with
      | Error stk -> Error stk
      | Ok (t', stctx', syctx') -> (
-         match t' with TmVal _ -> res | _ -> sym_exe t' stctx' syctx' print_state) *)
+         match t' with TmVal _ -> res | _ -> sym_exe t' stctx' syctx' print_state) *) *)

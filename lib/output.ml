@@ -1,4 +1,4 @@
-open Aux
+(* open Aux
 open Ast
 open Format
 
@@ -381,4 +381,4 @@ let print_tool_box_shell formatter =
 let make_print_toolbox fmt formatter =
   match fmt with
   | FmtShell -> print_tool_box_shell formatter
-  | FmtLatex -> assert false
+  | FmtLatex -> assert false *)

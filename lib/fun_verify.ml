@@ -1,4 +1,4 @@
-open Exe
+(* open Exe
 
 let init_sym_ctx params =
   let rec init_sym_ctx_h params dctx smem =
@@ -48,4 +48,4 @@ let verify f print_state =
   | Error stk -> Error stk
   | Ok (TmVal _, stctx', syctx') -> clean_up stctx' syctx'
   | _ -> assert false
-(* sym_exe fails or returns value *)
+sym_exe fails or returns value *)
