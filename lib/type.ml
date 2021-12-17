@@ -6,17 +6,22 @@ type ptr_kind = PkOwn | PkRef of ref_kind * lft | PkRaw
 
 type typ_var = Id.t
 
+type typ_id = Id.t
+
 type typ =
   | TypNat
   | TypPtr of ptr_kind * typ
+  | TypStruct of Id.t * typ list
+  | TypEnum of Id.t * typ list
   | TypRecur of typ_var * typ
   | TypVar of typ_var
-  | TypRec of Id.t * typ list
-  | TypEnum of Id.t * typ list
+  | TypId of typ_id
 
-let typ_unit = TypRec ("unit", [])
+let typ_unit = TypStruct ("unit", [])
 
 let typ_empty = TypEnum ("empty", [])
+
+let typ_bool = TypEnum ("bool", [ typ_unit; typ_unit ])
 
 (* let is_complete typ = true *)
 

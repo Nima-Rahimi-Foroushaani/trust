@@ -8,7 +8,7 @@ type op = OpArith of op_arith | OpBool of op_bool
 
 type conc_nat = int
 
-type conc_vlu = CvNat of conc_nat | CvUnit | CvPoison
+type conc_vlu = CvNat of conc_nat | CvPoison
 
 type sym_nat_expr =
   | SneConc of conc_nat
@@ -39,12 +39,12 @@ type fn_sign = {
 
 type typ = Type.typ
 
-type inj = int
+type inj = conc_nat
 
 type ins =
   | InsMutBor of var * lft * var
   | InsDrop of var
-  | InsImm of var
+  | InsImmut of var
   | InsSwap of var * var
   | InsCreateRef of var * var
   | InsDeref of var * var
@@ -58,24 +58,32 @@ type ins =
   | InsOp of var * var * op * var
   | InsRand of var
   (* let *y = id.i *x *)
-  | InsCrEnum of var * inj * Id.t * var
+  | InsCrEnum of var * Id.t * inj * var
   (* let *y = id{*x_1,...,*x_n} *)
-  | InsCrRec of var * Id.t * var list
+  | InsCrStruct of var * Id.t * var list
+  (* let *y_1,...,*y_n = *x *)
+  | InsFieldAcc of var list * var
   | InsCrRaw of var * var
   | InsSafe
   | InsUnsafe
+  | InsAlloc of conc_nat
+  | InsDealloc of var
 
 type statement =
   | StIns of ins * label
   | StRet of var
-  (* match *x id {*y_0 -> goto L_0, ..., *y_n -> goto L_n} *)
-  | StMatch of var * Id.t * (var * label) list
+  (* match *x {*y_0 => goto L_0,..., *y_n => goto L_n} *)
+  | StMatch of var * (var * label) list
 
 type fn_body = (label * statement) list
 
 type fn_def = { id : fn_id; sign : fn_sign; body : fn_body }
 
-type program = fn_def list
+type typ_defs = typ list
+
+type fn_defs = fn_def list
+
+type program = typ_defs * fn_defs
 
 (**represents the simplest value, supported by our abstract machine.
   In a symbolic machine, of course it would be a symbol.
