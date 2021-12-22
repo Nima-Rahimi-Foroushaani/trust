@@ -21,13 +21,13 @@ type vlu = VSym of sym_vlu | VConc of conc_vlu
 
 type label = Id.t
 
-type var = Id.t
+type var = Type.var
 
 type lft = Type.lft
 
 type fn_id = Id.t
 
-type safety = Safe | Unsafe
+type safety = Type.safety
 
 type fn_sign = {
   safety : safety;
@@ -57,16 +57,16 @@ type ins =
   | InsConst of var * conc_vlu
   | InsOp of var * var * op * var
   | InsRand of var
-  (* let *y = id.i *x *)
-  | InsCrEnum of var * Id.t * inj * var
-  (* let *y = id{*x_1,...,*x_n} *)
-  | InsCrStruct of var * Id.t * var list
-  (* let *y_1,...,*y_n = *x *)
+  (* let *y = T.i *x *)
+  | InsCrEnum of var * typ * inj * var
+  (* let *y = T{*x_1,...,*x_n} *)
+  | InsCrStruct of var * typ * var list
+  (* let {*y_1,...,*y_n} = *x *)
   | InsFieldAcc of var list * var
   | InsCrRaw of var * var
   | InsSafe
   | InsUnsafe
-  | InsAlloc of conc_nat
+  | InsAlloc of var
   | InsDealloc of var
 
 type statement =
@@ -79,80 +79,10 @@ type fn_body = (label * statement) list
 
 type fn_def = { id : fn_id; sign : fn_sign; body : fn_body }
 
+type typ_def = TdStruct of Id.t * lft list * typ list
+
 type typ_defs = typ list
 
 type fn_defs = fn_def list
 
 type program = typ_defs * fn_defs
-
-(**represents the simplest value, supported by our abstract machine.
-  In a symbolic machine, of course it would be a symbol.
-  In a concrete machine, it can be a simple integer for example*)
-
-module type BASE_VALUE = sig
-  type t
-
-  val ( = ) : t -> t -> bool
-end
-
-module Ins = struct
-  module type S = sig
-    type vlu
-
-    type ins
-  end
-
-  module Make =
-  functor
-    (BV : BASE_VALUE)
-    ->
-    struct
-      type base_vlu = BV.t
-
-      type vlu = VluUnit | VluInt of base_vlu
-
-      type ghost_ins =
-        | GhImmute of Id.t
-        | GhIntro of Id.t
-        | GhNow of Id.t
-        | GhRealize of Id.t
-        | GhUrealize of Id.t
-
-      type ins =
-        | InsMutBor of Id.t * Id.t * Id.t
-        | InsRaw of Id.t * Id.t
-        | InsDrop of Id.t
-        | InsSwap of Id.t * Id.t
-        | InsMkPtr of Id.t * Id.t
-        | InsDeref of Id.t * Id.t
-        | InsCopy of Id.t * Id.t
-        | InsCnst of Id.t * vlu
-        | InsGhost of ghost_ins
-    end
-end
-
-module Prog = struct
-  module type S = sig
-    type label = int
-
-    type ins
-
-    type prog = ins list
-  end
-
-  module Make =
-  functor
-    (I : Ins.S)
-    ->
-    struct
-      type label = int
-
-      type ins = I.ins
-
-      type prog = ins list
-    end
-end
-
-module CodeInfo = struct
-  type t = { f : string; l : int; cb : int; ce : int }
-end

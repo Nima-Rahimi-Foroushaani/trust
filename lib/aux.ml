@@ -11,6 +11,9 @@ module Name = struct
 end
 
 module ListAux = struct
+  (**
+  returns the "set" of members of its input
+  *)
   let uniq l =
     let rec uniq_h l ul =
       match l with
@@ -19,6 +22,23 @@ module ListAux = struct
       | [] -> ul
     in
     uniq_h l []
+
+  let rec try_fold_left f p l =
+    match l with
+    | hd :: tl -> (
+        match f p hd with Ok r -> try_fold_left f r tl | Error e -> Error e)
+    | [] -> Ok p
+
+  let partition_before_after pred lst =
+    let rec helper checked rest =
+      match rest with
+      | [] -> (checked, None, [])
+      | hd :: tail ->
+          if pred hd then (checked, Some hd, tail)
+          else helper (hd :: checked) tail
+    in
+    let rev_before, ent, after = helper [] lst in
+    (List.rev rev_before, ent, after)
 end
 
 module Tree = struct
