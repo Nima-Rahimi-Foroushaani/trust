@@ -1,92 +1,89 @@
 open Syntax
 open Type
 open Exception
-open Aux
 
-let lifetimes_of_typ t =
-  let rec helper extracted t =
-    match t with
-    | TypNat -> extracted
-    | TypPtr (pk, t') ->
-        let new_ex =
-          match pk with
-          | PkOwn | PkRaw -> extracted
-          | PkRef (_, lft) -> lft :: extracted
-        in
-        helper new_ex t'
-    | TypStruct (_, fts) | TypEnum (_, fts) ->
-        List.fold_left helper extracted fts
-        | TypRecur of typ_var * typ
-    | _ -> raise exc_not_supported
-    (*
-| TypVar of typ_var
-| TypId of typ_id *)
-  in
-  ()
-
-let get_var_ctx_ent ent =
-  match ent with VceActive (var, _) -> var | VceFrozen (var, _, _) -> var
-
-let new_var_chk var var_ctx =
-  let f ent = var = get_var_ctx_ent ent in
-  if List.exists f var_ctx then
-    Error ("The variable name " ^ var ^ " already exists in the context")
-  else Ok ()
-
-let ins_typ_chk ins
-    ((var_ctx, ((lfts, lft_leq) as lft_ctx), safety) as whole_ctx) =
+let ins_typ_chk ins (var_ctx, ((lfts, lft_leq) as lft_ctx), safety) =
   match ins with
-  | InsMutBor (lvar, lft, rvar) -> (
-      match new_var_chk lvar var_ctx with
-      | Error msg -> Error msg
-      | Ok () -> (
-          if not (List.exists (( = ) lft) lfts) then
-            Error ("The lifetime " ^ lft ^ " is not going on")
-          else
-            let f ent = rvar = get_var_ctx_ent ent in
-            match ListAux.partition_before_after f var_ctx with
-            | _, None, _ ->
-                Error ("The Variable " ^ " does not exist in the context")
-            | before, Some ent, after -> (
-                match ent with
-                | VceFrozen (_, fzr_lft, _) ->
-                    Error
-                      ("The Variable " ^ rvar
-                     ^ " is already frozen under lifetime " ^ fzr_lft
-                     ^ " and cannot be borrowed")
-                | VceActive (_, t) ->
-                    let new_var_ctx =
-                      VceActive (lvar, TypPtr (PkRef (RkMut, lft), t))
-                      :: before
-                      @ (VceFrozen (rvar, lft, t) :: after)
-                    in
-                    Ok (new_var_ctx, lft_ctx, safety))))
+  | InsMutBor (y, lft, x) -> (
+      match VarCtx.take_active_ent var_ctx x with
+      | Error msg -> Error ("Cannot borrow from " ^ x ^ ": " ^ msg)
+      | Ok (t, rest) -> (
+          let pk, st = VarCtx.ent_decons_typ t in
+          match pk with
+          | PkRef (RkImmut, _) ->
+              Error ("Cannot reborrow exclusively from shared reference " ^ x)
+          | PkRaw -> Error ("Cannot borrow exclusively from raw pointer " ^ x)
+          | PkOwn | PkRef (RkMut, _) -> (
+              let t_lfts = get_lfts t in
+              let is_included = LftCtx.is_included lft_leq in
+              if not (List.for_all (fun t_lft -> is_included lft t_lft) t_lfts)
+              then
+                Error
+                  ("To borrow from " ^ x ^ " under lifetime " ^ lft
+                 ^ ", it should be included in all the lifetimes which apear \
+                    in the type of " ^ x)
+              else
+                let ents =
+                  let open VarCtx in
+                  [
+                    VceActive (y, TypPtr (PkRef (RkMut, lft), st));
+                    VceFrozen (x, lft, t);
+                  ]
+                in
+                match VarCtx.add_ents lfts rest ents with
+                | Error msg -> Error msg
+                | Ok var_ctx1 -> Ok (var_ctx1, lft_ctx, safety))))
+  | InsDrop x -> (
+      match VarCtx.take_active_ent var_ctx x with
+      | Error msg -> Error ("Cannot drop " ^ x ^ ": " ^ msg)
+      | Ok (_, rest) -> Ok (rest, lft_ctx, safety))
+  | InsImmut x -> (
+      match VarCtx.take_active_ent var_ctx x with
+      | Error msg -> Error ("Cannot weak " ^ x ^ ": " ^ msg)
+      | Ok (t, rest) -> (
+          let pk, st = VarCtx.ent_decons_typ t in
+          (fun cont ->
+            match pk with
+            | PkRef (RkMut, b_lft) -> cont b_lft
+            | _ ->
+                Error
+                  ("The variable " ^ x
+                 ^ " is not a mutable reference and therefore cannot be \
+                    changed to immutable"))
+          @@ fun b_lft ->
+          let ent_imm =
+            VarCtx.VceActive (x, TypPtr (PkRef (RkImmut, b_lft), st))
+          in
+          (*** VarCtx.add_ent performs unnecessary checks here.
+            But let it be for uniformity in maintenance *)
+          match VarCtx.add_ent lfts rest ent_imm with
+          | Error msg -> Error msg
+          | Ok var_ctx1 -> Ok (var_ctx1, lft_ctx, safety)))
   | _ -> raise exc_not_supported
-(* | InsDrop var -> ()
-   | InsImmut var -> ()
-   | InsSwap (lvar, rvar) -> ()
-   | InsCreateRef (lvar, rvar) -> ()
-   | InsDeref (lvar, rvar) -> ()
-   | InsCopy (lvar, rvar) -> ()
-   | InsTypWeak (var, typ) -> ()
-   | InsFnCall (var, fn_id, lfts, vars) -> ()
-   | InsIntro lft -> ()
-   | InsLftLeq (llft, rlft) -> ()
-   | InsNow lft -> ()
-   | InsConst (var, conc_vlu) -> ()
-   | InsOp (lvar, r1var, op, r2var) -> ()
-   | InsRand var -> ()
-   (* let *y = T.i *x *)
-   | InsCrEnum (lvar, typ, inj, rvar) -> ()
-   (* let *y = T{*x_1,...,*x_n} *)
-   | InsCrStruct (var, typ, vars) -> ()
-   (* let {*y_1,...,*y_n} = *x *)
-   | InsFieldAcc (vars, rvar) -> ()
-   | InsCrRaw (lvar, rvar) -> ()
-   | InsSafe -> ()
-   | InsUnsafe -> ()
-   | InsAlloc var -> ()
-   | InsDealloc var -> () *)
+(*
+          | InsSwap (x, y) -> Error ""
+     | InsCreateRef (lvar, rvar) -> ()
+     | InsDeref (lvar, rvar) -> ()
+     | InsCopy (lvar, rvar) -> ()
+     | InsTypWeak (var, typ) -> ()
+     | InsFnCall (var, fn_id, lfts, vars) -> ()
+     | InsIntro lft -> ()
+     | InsLftLeq (llft, rlft) -> ()
+     | InsNow lft -> ()
+     | InsConst (var, conc_vlu) -> ()
+     | InsOp (lvar, r1var, op, r2var) -> ()
+     | InsRand var -> ()
+     (* let *y = T.i *x *)
+     | InsCrEnum (lvar, typ, inj, rvar) -> ()
+     (* let *y = T{*x_1,...,*x_n} *)
+     | InsCrStruct (var, typ, vars) -> ()
+     (* let {*y_1,...,*y_n} = *x *)
+     | InsFieldAcc (vars, rvar) -> ()
+     | InsCrRaw (lvar, rvar) -> ()
+     | InsSafe -> ()
+     | InsUnsafe -> ()
+     | InsAlloc var -> ()
+     | InsDealloc var -> () *)
 
 (* module Checker = struct
 

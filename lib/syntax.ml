@@ -21,23 +21,15 @@ type vlu = VSym of sym_vlu | VConc of conc_vlu
 
 type label = Id.t
 
-type var = Type.var
-
-type lft = Type.lft
-
 type fn_id = Id.t
-
-type safety = Type.safety
 
 type fn_sign = {
   safety : safety;
   lft_params : lft list;
   lft_req : (lft * lft) list;
-  params : (var * typ) list;
-  ret : typ;
+  params : (var * typ_syn) list;
+  ret : typ_syn;
 }
-
-type typ = Type.typ
 
 type inj = conc_nat
 
@@ -49,7 +41,7 @@ type ins =
   | InsCreateRef of var * var
   | InsDeref of var * var
   | InsCopy of var * var
-  | InsTypWeak of var * typ
+  | InsTypWeak of var * typ_syn
   | InsFnCall of var * fn_id * lft list * var list
   | InsIntro of lft
   | InsLftLeq of lft * lft
@@ -57,10 +49,10 @@ type ins =
   | InsConst of var * conc_vlu
   | InsOp of var * var * op * var
   | InsRand of var
-  (* let *y = T.i *x *)
-  | InsCrEnum of var * typ * inj * var
-  (* let *y = T{*x_1,...,*x_n} *)
-  | InsCrStruct of var * typ * var list
+  (* let *y = Tid<alpha_1,...,alpha_n>.i *x *)
+  | InsCrEnum of var * typ_syn * inj * var
+  (* let *y = Tid<alpha_1,...,alpha_n>{*x_1,...,*x_m} *)
+  | InsCrStruct of var * typ_syn * var list
   (* let {*y_1,...,*y_n} = *x *)
   | InsFieldAcc of var list * var
   | InsCrRaw of var * var
@@ -72,16 +64,14 @@ type ins =
 type statement =
   | StIns of ins * label
   | StRet of var
-  (* match *x {*y_0 => goto L_0,..., *y_n => goto L_n} *)
+  (* match *x {*y_0 => goto L_0,...,*y_n => goto L_n} *)
   | StMatch of var * (var * label) list
 
 type fn_body = (label * statement) list
 
 type fn_def = { id : fn_id; sign : fn_sign; body : fn_body }
 
-type typ_def = TdStruct of Id.t * lft list * typ list
-
-type typ_defs = typ list
+type typ_defs = typ_def list
 
 type fn_defs = fn_def list
 

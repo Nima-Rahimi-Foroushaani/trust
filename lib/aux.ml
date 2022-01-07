@@ -17,9 +17,9 @@ module ListAux = struct
   let uniq l =
     let rec uniq_h l ul =
       match l with
+      | [] -> ul
       | h :: tl ->
           if List.exists (( = ) h) tl then uniq_h tl ul else uniq_h tl (h :: ul)
-      | [] -> ul
     in
     uniq_h l []
 
@@ -29,16 +29,23 @@ module ListAux = struct
         match f p hd with Ok r -> try_fold_left f r tl | Error e -> Error e)
     | [] -> Ok p
 
+  let rec try_fold_right f p l =
+    match l with
+    | hd :: tl -> (
+        match try_fold_right f p tl with Error e -> Error e | Ok r -> f r hd)
+    | [] -> Ok p
+
   let partition_before_after pred lst =
     let rec helper checked rest =
       match rest with
-      | [] -> (checked, None, [])
+      | [] -> None
       | hd :: tail ->
-          if pred hd then (checked, Some hd, tail)
+          if pred hd then Some (checked, hd, tail)
           else helper (hd :: checked) tail
     in
-    let rev_before, ent, after = helper [] lst in
-    (List.rev rev_before, ent, after)
+    match helper [] lst with
+    | None -> None
+    | Some (rev_before, ent, after) -> Some (List.rev rev_before, ent, after)
 end
 
 module Tree = struct
