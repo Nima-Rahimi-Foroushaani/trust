@@ -67,24 +67,39 @@ let get_lfts t =
   in
   helper [] t
 
+let is_read_acc pk = match pk with PkOwn | PkRef _ -> true | PkRaw -> false
+
+let is_write_acc pk =
+  match pk with
+  | PkOwn | PkRef (RkMut, _) -> true
+  | PkRef (RkImmut, _) | PkRaw -> false
+
+let rec is_copy t =
+  (*** todo: Is this right to have empty type of trait copy *)
+  match t with
+  | TypNat -> true
+  | TypPtr (pk, _) -> (
+      match pk with PkRef (RkImmut, _) | PkRaw -> true | _ -> false)
+  | TypStruct (_, ts) | TypEnum (_, ts) -> List.for_all is_copy ts
+
+let gen_rk_name = function RkImmut -> "imm" | RkMut -> "mut"
+
+let gen_pk_name = function
+  | PkOwn -> "own"
+  | PkRef (rk, lft) -> gen_rk_name rk ^ "'" ^ lft
+  | PkRaw -> "raw"
+
+let rec gen_typ_name_sep sopen sclose t =
+  let gen_typ_name = gen_typ_name_sep sopen sclose in
+  match t with
+  | TypNat -> "nat"
+  | TypPtr (pk, t1) -> gen_pk_name pk ^ sopen ^ gen_typ_name t1 ^ sclose
+  | TypStruct (id, _) -> "struct " ^ id
+  | TypEnum (id, _) -> "enum " ^ id
+
+let gen_typ_name = gen_typ_name_sep "(" ")"
+
 (*
-   let gen_rk_name = function RkImmut -> "imm" | RkMut -> "mut"
-
-   let gen_pk_name = function
-     | PkOwn -> "own"
-     | PkRef (rk, lft) -> gen_rk_name rk ^ "'" ^ lft
-     | PkRaw -> "raw"
-
-   let rec gen_typ_name_sep sopen sclose t =
-     let gen_typ_name = gen_typ_name_sep sopen sclose in
-     match t with
-     | TypNat -> "nat"
-     | TypPtr (pk, t') -> gen_pk_name pk ^ sopen ^ gen_typ_name t' ^ sclose
-     | TypStruct (id, _) -> "struct " ^ id
-     | TypEnum (id, _) -> "enum " ^ id
-
-   let gen_typ_name = gen_typ_name_sep "(" ")"
-
    let get_td_id = function TdStruct (id, _, _) | TdEnum (id, _, _) -> id
 
    let find_td tdefs t =
@@ -197,3 +212,103 @@ module VarCtx = struct
 end
 
 type whole_ctx = VarCtx.t * LftCtx.t * safety
+
+let rec is_subtype lft_leq t1 t2 =
+  let pointer_subtype pk1 t11 t2 =
+    (fun cont -> match t2 with TypPtr (pk2, t22) -> cont pk2 t22 | _ -> false)
+    @@ fun pk2 t22 ->
+    if not (is_subtype lft_leq t11 t22) then false
+    else
+      match pk1 with
+      | PkOwn -> pk2 = PkOwn
+      (*** todo: No subtyping for raw pointers for now *)
+      | PkRaw -> false
+      | PkRef (rk1, alpha1) ->
+          (fun cont ->
+            match pk2 with PkRef (rk2, alpha2) -> cont rk2 alpha2 | _ -> false)
+          @@ fun rk2 alpha2 ->
+          if rk1 <> rk2 then false
+          else
+            (*** Subtyping and lifetimes are contravariant *)
+            LftCtx.is_included lft_leq alpha2 alpha1
+  in
+  match t1 with
+  | TypNat -> t1 = t2
+  | TypPtr (pk1, t11) -> pointer_subtype pk1 t11 t2
+  (*** todo: No subtyping for structs and enums for now *)
+  | TypStruct _ | TypEnum _ -> t1 = t2
+
+let get_typ_def typ_defs id =
+  let f e =
+    let eid, _ = e in
+    eid = id
+  in
+  match List.partition f typ_defs with
+  | [], _ -> Error ("There is not any type definition for " ^ id)
+  | [ (_, body) ], _ -> Ok body
+  | _ ->
+      raise
+        (Excp
+           ( SevBug,
+             "More than one definition for the same type id in typing \
+              definitions context" ))
+
+let rec subs_lft_typ lft_param lft_arg t =
+  let helper lft = if lft = lft_param then lft_arg else lft in
+  match t with
+  | TypSynNat -> TypSynNat
+  | TypSynPtr (pk, t1) -> (
+      let t2 = subs_lft_typ lft_param lft_arg t1 in
+      match pk with
+      | PkOwn | PkRaw -> TypSynPtr (pk, t2)
+      | PkRef (rk, alpha) ->
+          let lft = helper alpha in
+          TypSynPtr (PkRef (rk, lft), t2))
+  | TypSynDef (id, lfts) ->
+      let lfts1 = List.map helper lfts in
+      TypSynDef (id, lfts1)
+
+let subs_lfts_typ lft_params lft_args t =
+  Aux.PL.subs_multi_param Aux.Name.fresh_name subs_lft_typ lft_params lft_args t
+
+let subs_lft_rel p a elms =
+  let f elm =
+    let l, r = elm in
+    let f lft = if lft = p then a else lft in
+    (f l, f r)
+  in
+  List.map f elms
+
+let subs_lfts_rel params args rel =
+  Aux.PL.subs_multi_param Aux.Name.fresh_name subs_lft_rel params args rel
+
+let rec resolve tdefs tsyn =
+  match tsyn with
+  | TypSynNat -> Ok TypNat
+  | TypSynPtr (pk, tsyn1) -> (
+      match resolve tdefs tsyn1 with
+      | Ok t1 -> Ok (TypPtr (pk, t1))
+      | Error msg -> Error msg)
+  | TypSynDef (id, lft_args) -> (
+      match get_typ_def tdefs id with
+      | Error msg -> Error msg
+      | Ok def -> (
+          (fun cont ->
+            match def with
+            | TdbStruct (lft_params, tsyns) -> (
+                match cont lft_params tsyns with
+                | Ok ts -> Ok (TypStruct (id, ts))
+                | Error msg -> Error msg)
+            | TdbEnum (lft_params, tsyns) -> (
+                match cont lft_params tsyns with
+                | Ok ts -> Ok (TypEnum (id, ts))
+                | Error msg -> Error msg))
+          @@ fun lft_params tsyns ->
+          match
+            Aux.ListAux.try_map
+              (fun tsyn -> subs_lfts_typ lft_params lft_args tsyn)
+              tsyns
+          with
+          | Error msg -> Error msg
+          | Ok tsyns1 ->
+              Aux.ListAux.try_map (fun tsyn -> resolve tdefs tsyn) tsyns1))

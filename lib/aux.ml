@@ -1,3 +1,5 @@
+open Exception
+
 module Name = struct
   (**Creates a name based on a provided base name, and an index*)
   let create_name bn idx =
@@ -8,6 +10,16 @@ module Name = struct
       | _ -> raise (invalid_arg "Negative index")
     in
     bn ^ idx_str
+
+  let fresh_name ctx bn =
+    let rec helper ctx bn idx =
+      let name = create_name bn idx in
+      if not (List.exists (( = ) name) ctx) then name
+      else if idx = Int.max_int then
+        raise (Excp (SevError, "No more options to make a fresh name"))
+      else helper ctx bn (idx + 1)
+    in
+    helper ctx bn 0
 end
 
 module ListAux = struct
@@ -23,6 +35,11 @@ module ListAux = struct
     in
     uniq_h l []
 
+  let rec has_duplicate l =
+    match l with
+    | [] -> false
+    | hd :: tl -> if List.exists (( = ) hd) tl then true else has_duplicate tl
+
   let rec try_fold_left f p l =
     match l with
     | hd :: tl -> (
@@ -35,17 +52,63 @@ module ListAux = struct
         match try_fold_right f p tl with Error e -> Error e | Ok r -> f r hd)
     | [] -> Ok p
 
-  let partition_before_after pred lst =
+  let partition_before_after f l =
     let rec helper checked rest =
       match rest with
       | [] -> None
-      | hd :: tail ->
-          if pred hd then Some (checked, hd, tail)
-          else helper (hd :: checked) tail
+      | hd :: tl ->
+          if f hd then Some (checked, hd, tl) else helper (hd :: checked) tl
     in
-    match helper [] lst with
+    match helper [] l with
     | None -> None
     | Some (rev_before, ent, after) -> Some (List.rev rev_before, ent, after)
+
+  let try_map f l =
+    let rec helper mpd rest =
+      match rest with
+      | [] -> Ok mpd
+      | hd :: tl -> (
+          match f hd with
+          | Ok m -> helper (m :: mpd) tl
+          | Error msg -> Error msg)
+    in
+    match helper [] l with
+    | Error msg -> Error msg
+    | Ok mpd -> Ok (List.rev mpd)
+end
+
+module PL = struct
+  (**
+    * There are two possible problems with the substitution of an argument in a parameter:
+    * 1-If parameter name is same as one of the parameters of inner abstractions, substitution
+    * cuts off the relation of that inner parameter with its occurrences. It would not happen here though
+    * because for this multi-parameter abstraction it does not make sense to have similar parameter names.
+    * 2-If the argument is equal to one of the inner abstraction parameters. In this case the substitution
+    * causes the substituted parameter to get captured by the inner parameter which was not related in
+    * the first place. We fix this by alpha conversion.
+  *)
+  let subs_multi_param fresh subs params args body =
+    if ListAux.has_duplicate params then
+      Error "The parameter list involves duplicate parameters"
+    else
+      let rec helper params args body =
+        match (params, args) with
+        | [], [] -> Ok body
+        | phd :: ptl, ahd :: atl -> (
+            match ListAux.partition_before_after (( = ) ahd) ptl with
+            | None ->
+                let body1 = subs phd ahd body in
+                helper ptl atl body1
+            | Some (lps, p, rps) ->
+                let p1 = fresh params p in
+                let body1 = subs p p1 body in
+                let params1 = (phd :: lps) @ (p1 :: rps) in
+                helper params1 args body1)
+        | _ ->
+            Error
+              "The lists of parameters and arguments are not of the same length"
+      in
+      helper params args body
 end
 
 module Tree = struct

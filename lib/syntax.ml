@@ -1,3 +1,4 @@
+open Exception
 open Type
 
 type op_arith = Add | Sub
@@ -76,3 +77,9 @@ type typ_defs = typ_def list
 type fn_defs = fn_def list
 
 type program = typ_defs * fn_defs
+
+let get_fn_def fn_defs fn_id =
+  match List.partition (fun def -> def.id = fn_id) fn_defs with
+  | [], _ -> Error ("There is no function definition for " ^ fn_id)
+  | [ def ], _ -> Ok def
+  | _ -> raise (Excp (SevBug, "More than one function definition for " ^ fn_id))
